@@ -7,6 +7,7 @@ from app.models import Payment
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
 PAYMENT_CHARGE_STATUSES: set[str] = {"SUCCESS", "FAILED"}
+REFUND_CREDIT_STATUSES: set[str] = {"SUCCESS"}
 
 
 def charge(payload) -> Payment:
@@ -64,6 +65,41 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def annotate_history(payments) -> list[dict]:
+    charge_ids = [payment.id for payment in payments if payment.type == "CHARGE"]
+    refunded_cents = _refunded_cents_by_charge(charge_ids)
+
+    history = []
+    for payment in payments:
+        entry = payment.to_dict()
+        if payment.type == "CHARGE":
+            cents = refunded_cents.get(payment.id, 0)
+            entry["refundedAmount"] = float(Decimal(cents) / 100)
+        history.append(entry)
+    return history
+
+
+def _refunded_cents_by_charge(charge_ids) -> dict[int, int]:
+    if not charge_ids:
+        return {}
+
+    statement = (
+        db.select(
+            Payment.related_payment_id,
+            db.func.sum(Payment.amount * 100),
+        )
+        .where(
+            Payment.type == "REFUND",
+            Payment.status.in_(REFUND_CREDIT_STATUSES),
+            Payment.related_payment_id.in_(charge_ids),
+        )
+        .group_by(Payment.related_payment_id)
+    )
+    return {
+        related_payment_id: int(Decimal(str(total)).to_integral_value())
+        for related_payment_id, total in db.session.execute(statement)
+    }
 
 
 def _save(payment):
