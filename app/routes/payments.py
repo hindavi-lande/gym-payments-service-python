@@ -17,6 +17,12 @@ def refund():
     return jsonify(payment.to_dict()), 201
 
 
+@payments_bp.post("/payments/merge")
+def merge():
+    moved_count = payment_service.merge_member_payments(_json_body())
+    return jsonify({"movedCount": moved_count}), 200
+
+
 @payments_bp.get("/payments/member/<int:member_id>")
 def get_history_for_member(member_id):
     history = payment_service.get_history_for_member(member_id)

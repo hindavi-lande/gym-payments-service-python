@@ -3,6 +3,11 @@ def charge(client, **overrides):
     return client.post("/api/payments/charge", json=payload)
 
 
+def merge(client, **overrides):
+    payload = {"fromMemberId": 1, "toMemberId": 2, **overrides}
+    return client.post("/api/payments/merge", json=payload)
+
+
 def test_health_returns_ok(client):
     response = client.get("/api/health")
 
@@ -145,3 +150,98 @@ def test_unknown_route_returns_404(client):
 
     assert response.status_code == 404
     assert "message" in response.get_json()
+
+
+def test_merge_moves_every_payment_to_the_kept_member(client):
+    original = charge(client).get_json()
+    refund = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    ).get_json()
+
+    response = merge(client)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"movedCount": 2}
+    assert client.get("/api/payments/member/1").get_json() == []
+    kept_history = client.get("/api/payments/member/2").get_json()
+    assert [payment["id"] for payment in kept_history] == [refund["id"], original["id"]]
+
+
+def test_merge_keeps_the_details_of_moved_payments(client):
+    original = charge(client, reason="PREMIUM plan renewal").get_json()
+    refund = client.post(
+        "/api/payments/refund",
+        json={
+            "memberId": 1,
+            "amount": 20,
+            "reason": "early cancellation",
+            "relatedPaymentId": original["id"],
+        },
+    ).get_json()
+
+    merge(client)
+
+    for before in (original, refund):
+        after = client.get(f"/api/payments/{before['id']}").get_json()
+        assert after["memberId"] == 2
+        assert after["id"] == before["id"]
+        assert after["type"] == before["type"]
+        assert after["amount"] == before["amount"]
+        assert after["status"] == before["status"]
+        assert after["reason"] == before["reason"]
+        assert after["relatedPaymentId"] == before["relatedPaymentId"]
+        assert after["createdAt"] == before["createdAt"]
+        assert after["updatedAt"] == before["updatedAt"]
+
+
+def test_merge_orders_the_combined_history_most_recent_first(client):
+    kept_charge = charge(client, memberId=2).get_json()
+    moved_charge = charge(client, memberId=1).get_json()
+    moved_refund = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 5, "relatedPaymentId": moved_charge["id"]},
+    ).get_json()
+
+    merge(client)
+
+    history = client.get("/api/payments/member/2").get_json()
+    assert [payment["id"] for payment in history] == [
+        moved_refund["id"],
+        moved_charge["id"],
+        kept_charge["id"],
+    ]
+
+
+def test_merge_returns_zero_when_the_duplicate_has_no_payments(client):
+    kept_charge = charge(client, memberId=2).get_json()
+
+    response = merge(client)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"movedCount": 0}
+    kept_history = client.get("/api/payments/member/2").get_json()
+    assert [payment["id"] for payment in kept_history] == [kept_charge["id"]]
+
+
+def test_merge_rejects_invalid_member_ids_and_leaves_payments_untouched(client):
+    original = charge(client).get_json()
+
+    invalid_payloads = [
+        {"toMemberId": 2},
+        {"fromMemberId": 1},
+        {"fromMemberId": "1", "toMemberId": 2},
+        {"fromMemberId": 1, "toMemberId": "2"},
+        {"fromMemberId": True, "toMemberId": 2},
+        {"fromMemberId": 1, "toMemberId": False},
+        {"fromMemberId": 0, "toMemberId": 2},
+        {"fromMemberId": 1, "toMemberId": 0},
+    ]
+
+    for payload in invalid_payloads:
+        response = client.post("/api/payments/merge", json=payload)
+
+        assert response.status_code == 400
+
+    history = client.get("/api/payments/member/1").get_json()
+    assert [payment["id"] for payment in history] == [original["id"]]
