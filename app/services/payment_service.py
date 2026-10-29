@@ -6,16 +6,18 @@ from app.models import Payment
 
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
+PAYMENT_STATUSES = frozenset({"SUCCESS", "FAILED", "PENDING"})
 
 
 def charge(payload):
     data = _validate_payment_payload(payload)
+    status = _parse_status(payload.get("status"))
     payment = Payment(
         member_id=data["member_id"],
         amount=data["amount"],
         reason=data["reason"],
         type="CHARGE",
-        status="SUCCESS",
+        status=status,
     )
     return _save(payment)
 
@@ -101,6 +103,14 @@ def _parse_amount(value):
         raise ApiError(400, "amount must be at most 99999999.99")
 
     return amount.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _parse_status(value):
+    if value is None:
+        return "SUCCESS"
+    if isinstance(value, str) and value in PAYMENT_STATUSES:
+        return value
+    raise ApiError(400, "status must be one of: FAILED, PENDING, SUCCESS")
 
 
 def _parse_positive_int(value, field):

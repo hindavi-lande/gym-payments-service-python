@@ -22,6 +22,34 @@ def test_charge_records_a_successful_charge(client):
     assert body["amount"] == 49.99
 
 
+def test_charge_with_failed_status_persists_the_charge_and_returns_402(client):
+    response = charge(client, status="FAILED")
+
+    assert response.status_code == 402
+    body = response.get_json()
+    assert body["type"] == "CHARGE"
+    assert body["status"] == "FAILED"
+
+    stored = client.get(f"/api/payments/{body['id']}")
+    assert stored.status_code == 200
+    assert stored.get_json()["status"] == "FAILED"
+
+
+def test_charge_accepts_an_explicit_success_status(client):
+    response = charge(client, status="SUCCESS")
+
+    assert response.status_code == 201
+    assert response.get_json()["status"] == "SUCCESS"
+
+
+def test_charge_rejects_an_unknown_status(client):
+    response = charge(client, status="DECLINED")
+
+    assert response.status_code == 400
+    assert "status" in response.get_json()["message"]
+    assert client.get("/api/payments/member/1").get_json() == []
+
+
 def test_charge_rejects_an_amount_of_zero_or_below(client):
     response = client.post("/api/payments/charge", json={"memberId": 1, "amount": 0})
 

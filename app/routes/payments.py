@@ -8,6 +8,8 @@ payments_bp = Blueprint("payments", __name__, url_prefix="/api")
 @payments_bp.post("/payments/charge")
 def charge():
     payment = payment_service.charge(_json_body())
+    if payment.status == "FAILED":
+        return jsonify(payment.to_dict()), 402
     return jsonify(payment.to_dict()), 201
 
 
