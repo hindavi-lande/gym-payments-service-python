@@ -1,3 +1,5 @@
+import calendar
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from app.errors import ApiError
@@ -63,6 +65,39 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def spend_for_member(member_id: int) -> Decimal:
+    window_start = _twelve_months_earlier(_now())
+    statement = db.select(Payment).where(
+        Payment.member_id == member_id,
+        Payment.status == "SUCCESS",
+        Payment.created_at >= window_start,
+    )
+
+    total_cents = 0
+    for payment in db.session.scalars(statement):
+        if payment.type == "CHARGE":
+            total_cents += _to_cents(payment.amount)
+        elif payment.type == "REFUND":
+            total_cents -= _to_cents(payment.amount)
+
+    return (Decimal(total_cents) / 100).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _twelve_months_earlier(moment: datetime) -> datetime:
+    year = moment.year - 1
+    day = moment.day
+    if moment.month == 2 and day == 29 and not calendar.isleap(year):
+        day = 28
+    return moment.replace(year=year, day=day)
+
+
+def _to_cents(amount: Decimal) -> int:
+    return int(amount.quantize(CENT, rounding=ROUND_HALF_UP) * 100)
 
 
 def _save(payment):
