@@ -7,6 +7,8 @@ from app.models import Payment
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
 PAYMENT_STATUSES = frozenset({"SUCCESS", "FAILED", "PENDING"})
+REFUND_CONSUMING_STATUSES = frozenset({"SUCCESS", "PENDING"})
+SETTLEABLE_REFUND_STATUSES = frozenset({"SUCCESS", "FAILED"})
 
 
 def charge(payload):
@@ -24,6 +26,7 @@ def charge(payload):
 
 def refund(payload):
     data = _validate_payment_payload(payload)
+    status = _parse_status(payload.get("status"))
     related_id = data["related_payment_id"]
 
     if related_id is not None:
@@ -39,13 +42,21 @@ def refund(payload):
                 f"for member {data['member_id']}",
             )
 
+        remaining = _to_decimal(original.amount) - _already_refunded_amount(related_id)
+        if data["amount"] > remaining:
+            raise ApiError(
+                422,
+                f"refund of {data['amount']} exceeds the remaining {remaining} "
+                f"on charge {related_id}",
+            )
+
     payment = Payment(
         member_id=data["member_id"],
         amount=data["amount"],
         reason=data["reason"],
         related_payment_id=related_id,
         type="REFUND",
-        status="SUCCESS",
+        status=status,
     )
     return _save(payment)
 
@@ -55,6 +66,19 @@ def get_payment(payment_id):
     if payment is None:
         raise ApiError(404, f"Payment with id {payment_id} not found")
     return payment
+
+
+def settle_refund(payment_id, payload):
+    payment = get_payment(payment_id)
+
+    if payment.type != "REFUND" or payment.status != "PENDING":
+        raise ApiError(
+            422,
+            f"Payment with id {payment_id} is not a pending refund",
+        )
+
+    payment.status = _parse_settleable_status(payload.get("status"))
+    return _save(payment)
 
 
 def get_history_for_member(member_id):
@@ -72,6 +96,22 @@ def _save(payment):
     db.session.commit()
     db.session.refresh(payment)
     return payment
+
+
+def _already_refunded_amount(related_payment_id):
+    statement = db.select(Payment.amount).where(
+        Payment.type == "REFUND",
+        Payment.related_payment_id == related_payment_id,
+        Payment.status.in_(list(REFUND_CONSUMING_STATUSES)),
+    )
+    total = Decimal("0")
+    for amount in db.session.scalars(statement).all():
+        total += _to_decimal(amount)
+    return total
+
+
+def _to_decimal(value):
+    return Decimal(str(value))
 
 
 def _validate_payment_payload(payload):
@@ -111,6 +151,12 @@ def _parse_status(value):
     if isinstance(value, str) and value in PAYMENT_STATUSES:
         return value
     raise ApiError(400, "status must be one of: FAILED, PENDING, SUCCESS")
+
+
+def _parse_settleable_status(value):
+    if isinstance(value, str) and value in SETTLEABLE_REFUND_STATUSES:
+        return value
+    raise ApiError(400, "status must be one of: FAILED, SUCCESS")
 
 
 def _parse_positive_int(value, field):

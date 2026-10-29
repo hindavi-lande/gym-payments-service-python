@@ -3,6 +3,18 @@ def charge(client, **overrides):
     return client.post("/api/payments/charge", json=payload)
 
 
+def pending_refund(client, **overrides):
+    original = charge(client).get_json()
+    payload = {
+        "memberId": 1,
+        "amount": 20,
+        "relatedPaymentId": original["id"],
+        "status": "PENDING",
+        **overrides,
+    }
+    return client.post("/api/payments/refund", json=payload)
+
+
 def test_health_returns_ok(client):
     response = client.get("/api/health")
 
@@ -128,6 +140,219 @@ def test_refund_rejects_a_related_payment_that_is_itself_a_refund(client):
     )
 
     assert response.status_code == 422
+
+
+def test_refund_with_pending_status_is_stored_as_pending(client):
+    original = charge(client).get_json()
+
+    response = client.post(
+        "/api/payments/refund",
+        json={
+            "memberId": 1,
+            "amount": 20,
+            "relatedPaymentId": original["id"],
+            "status": "PENDING",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["type"] == "REFUND"
+    assert body["status"] == "PENDING"
+
+    stored = client.get(f"/api/payments/{body['id']}")
+    assert stored.status_code == 200
+    assert stored.get_json()["status"] == "PENDING"
+
+
+def test_refund_rejects_an_unknown_status(client):
+    original = charge(client).get_json()
+
+    response = client.post(
+        "/api/payments/refund",
+        json={
+            "memberId": 1,
+            "amount": 20,
+            "relatedPaymentId": original["id"],
+            "status": "DECLINED",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "status" in response.get_json()["message"]
+    assert len(client.get("/api/payments/member/1").get_json()) == 1
+
+
+def test_refund_rejects_an_over_refund_and_persists_nothing(client):
+    original = charge(client).get_json()
+    accepted = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    )
+    assert accepted.status_code == 201
+    accepted_refund = accepted.get_json()
+
+    response = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 30, "relatedPaymentId": original["id"]},
+    )
+
+    assert response.status_code == 422
+
+    history = client.get("/api/payments/member/1").get_json()
+    assert [payment["id"] for payment in history] == [accepted_refund["id"], original["id"]]
+
+    stored_charge = client.get(f"/api/payments/{original['id']}").get_json()
+    assert stored_charge["amount"] == 49.99
+    stored_refund = client.get(f"/api/payments/{accepted_refund['id']}").get_json()
+    assert stored_refund["amount"] == 20.0
+    assert stored_refund["status"] == "SUCCESS"
+
+
+def test_repeated_partial_refunds_are_allowed_until_the_charge_is_exhausted(client):
+    original = charge(client).get_json()
+
+    first = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    )
+    second = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    response = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 10, "relatedPaymentId": original["id"]},
+    )
+
+    assert response.status_code == 422
+    refunds = [
+        payment
+        for payment in client.get("/api/payments/member/1").get_json()
+        if payment["type"] == "REFUND"
+    ]
+    assert len(refunds) == 2
+
+
+def test_refund_rejects_a_second_full_refund_of_the_same_charge(client):
+    original = charge(client).get_json()
+
+    first = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 49.99, "relatedPaymentId": original["id"]},
+    )
+    assert first.status_code == 201
+
+    response = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 49.99, "relatedPaymentId": original["id"]},
+    )
+
+    assert response.status_code == 422
+    refunds = [
+        payment
+        for payment in client.get("/api/payments/member/1").get_json()
+        if payment["type"] == "REFUND"
+    ]
+    assert sum(payment["amount"] for payment in refunds) == 49.99
+
+
+def test_failed_refund_does_not_consume_the_charge(client):
+    original = charge(client).get_json()
+
+    failed = client.post(
+        "/api/payments/refund",
+        json={
+            "memberId": 1,
+            "amount": 49.99,
+            "relatedPaymentId": original["id"],
+            "status": "FAILED",
+        },
+    )
+    assert failed.status_code == 201
+    assert failed.get_json()["status"] == "FAILED"
+
+    response = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 49.99, "relatedPaymentId": original["id"]},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["status"] == "SUCCESS"
+
+
+def test_patch_settles_a_pending_refund_to_success(client):
+    refund = pending_refund(client).get_json()
+    assert refund["status"] == "PENDING"
+
+    response = client.patch(f"/api/payments/{refund['id']}", json={"status": "SUCCESS"})
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "SUCCESS"
+    stored = client.get(f"/api/payments/{refund['id']}")
+    assert stored.get_json()["status"] == "SUCCESS"
+
+
+def test_patch_settles_a_pending_refund_to_failed(client):
+    refund = pending_refund(client).get_json()
+    assert refund["status"] == "PENDING"
+
+    response = client.patch(f"/api/payments/{refund['id']}", json={"status": "FAILED"})
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "FAILED"
+    stored = client.get(f"/api/payments/{refund['id']}")
+    assert stored.get_json()["status"] == "FAILED"
+
+
+def test_patch_rejects_settling_a_non_pending_refund(client):
+    refund = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": None},
+    ).get_json()
+    assert refund["status"] == "SUCCESS"
+
+    response = client.patch(f"/api/payments/{refund['id']}", json={"status": "FAILED"})
+
+    assert response.status_code == 422
+    stored = client.get(f"/api/payments/{refund['id']}")
+    assert stored.get_json()["status"] == "SUCCESS"
+
+
+def test_patch_rejects_settling_a_pending_charge(client):
+    original = charge(client, status="PENDING").get_json()
+    assert original["type"] == "CHARGE"
+    assert original["status"] == "PENDING"
+
+    response = client.patch(f"/api/payments/{original['id']}", json={"status": "SUCCESS"})
+
+    assert response.status_code == 422
+    stored = client.get(f"/api/payments/{original['id']}")
+    assert stored.get_json()["status"] == "PENDING"
+
+
+def test_patch_rejects_an_invalid_target_status(client):
+    refund = pending_refund(client).get_json()
+
+    for invalid in ("PENDING", "DECLINED"):
+        response = client.patch(f"/api/payments/{refund['id']}", json={"status": invalid})
+
+        assert response.status_code == 400
+        assert "status" in response.get_json()["message"]
+
+    stored = client.get(f"/api/payments/{refund['id']}")
+    assert stored.get_json()["status"] == "PENDING"
+
+
+def test_patch_returns_404_for_an_unknown_payment(client):
+    response = client.patch("/api/payments/999999", json={"status": "SUCCESS"})
+
+    assert response.status_code == 404
+    assert "message" in response.get_json()
 
 
 def test_history_is_ordered_most_recent_first(client):

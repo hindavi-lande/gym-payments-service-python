@@ -31,6 +31,12 @@ def get_payment(payment_id):
     return jsonify(payment.to_dict())
 
 
+@payments_bp.patch("/payments/<int:payment_id>")
+def settle_payment(payment_id):
+    payment = payment_service.settle_refund(payment_id, _json_body())
+    return jsonify(payment.to_dict()), 200
+
+
 def _json_body():
     body = request.get_json(silent=True)
     return {} if body is None else body
