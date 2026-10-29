@@ -36,6 +36,27 @@ def test_charge_rejects_a_missing_member_id(client):
     assert "memberId" in response.get_json()["message"]
 
 
+def test_charge_with_failed_status_persists_and_returns_402(client):
+    response = charge(client, status="FAILED")
+
+    assert response.status_code == 402
+    body = response.get_json()
+    assert body["status"] == "FAILED"
+
+    stored = client.get(f"/api/payments/{body['id']}")
+
+    assert stored.status_code == 200
+    assert stored.get_json()["status"] == "FAILED"
+
+
+def test_charge_rejects_an_unsupported_status(client):
+    response = charge(client, status="PENDING")
+
+    assert response.status_code == 400
+    assert "status" in response.get_json()["message"]
+    assert client.get("/api/payments/member/1").get_json() == []
+
+
 def test_refund_records_against_a_valid_prior_charge(client):
     original = charge(client).get_json()
 

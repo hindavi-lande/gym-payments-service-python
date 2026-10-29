@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services import payment_service
 
@@ -6,9 +6,10 @@ payments_bp = Blueprint("payments", __name__, url_prefix="/api")
 
 
 @payments_bp.post("/payments/charge")
-def charge():
+def charge() -> tuple[Response, int]:
     payment = payment_service.charge(_json_body())
-    return jsonify(payment.to_dict()), 201
+    status_code = 402 if payment.status == "FAILED" else 201
+    return jsonify(payment.to_dict()), status_code
 
 
 @payments_bp.post("/payments/refund")
