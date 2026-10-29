@@ -6,18 +6,23 @@ from app.models import Payment
 
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
+PAYMENT_STATUSES = frozenset({"SUCCESS", "FAILED"})
 
 
 def charge(payload):
     data = _validate_payment_payload(payload)
+    status = _parse_status(payload.get("status"))
     payment = Payment(
         member_id=data["member_id"],
         amount=data["amount"],
         reason=data["reason"],
         type="CHARGE",
-        status="SUCCESS",
+        status=status,
     )
-    return _save(payment)
+    payment = _save(payment)
+    if status == "FAILED":
+        raise ApiError(402, f"Payment {payment.id} failed")
+    return payment
 
 
 def refund(payload):
@@ -120,4 +125,12 @@ def _optional_string(value, field):
         return None
     if not isinstance(value, str):
         raise ApiError(400, f"{field} must be a string")
+    return value
+
+
+def _parse_status(value):
+    if value is None:
+        return "SUCCESS"
+    if not isinstance(value, str) or value not in PAYMENT_STATUSES:
+        raise ApiError(400, "status must be one of: FAILED, SUCCESS")
     return value
