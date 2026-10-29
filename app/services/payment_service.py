@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from app.errors import ApiError
@@ -6,6 +7,7 @@ from app.models import Payment
 
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
+SPEND_WINDOW_DAYS = 365
 
 
 def charge(payload):
@@ -63,6 +65,24 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def get_spend_for_member(member_id):
+    # created_at is stored naive, so the window start is naive as well.
+    window_start = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=SPEND_WINDOW_DAYS)
+    statement = db.select(Payment).where(
+        Payment.member_id == member_id,
+        Payment.status == "SUCCESS",
+        Payment.created_at >= window_start,
+    )
+
+    spend = Decimal("0")
+    for payment in db.session.scalars(statement).all():
+        if payment.type == "CHARGE":
+            spend += payment.amount
+        elif payment.type == "REFUND":
+            spend -= payment.amount
+
+    return spend.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def _save(payment):

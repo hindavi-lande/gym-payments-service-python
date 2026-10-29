@@ -55,6 +55,9 @@ change the port.
   a refund; if `relatedPaymentId` is given it must reference an existing `CHARGE` for that same
   member, or `422`
 - `GET /api/payments/member/:memberId` — full payment history for a member, most recent first
+- `GET /api/payments/member/:memberId/spend` — net spend over the last 365 days, shaped as
+  `{ "memberId", "spend" }`. Sums `SUCCESS` charges, subtracts `SUCCESS` refunds, ignores every
+  other status, rounds to cents, and can be negative if refunds exceed charges in the window
 - `GET /api/payments/:id` — get one payment (`404` if missing)
 
 ## Relationship to gym-membership-service-python
