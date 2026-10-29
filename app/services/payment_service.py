@@ -64,6 +64,33 @@ def get_history_for_member(member_id):
     return db.session.scalars(statement).all()
 
 
+def merge_payments(payload: dict) -> int:
+    data = _validate_merge_payload(payload)
+    statement = (
+        db.update(Payment)
+        .where(Payment.member_id == data["from_member_id"])
+        .values(
+            member_id=data["to_member_id"],
+            updated_at=Payment.updated_at,
+        )
+    )
+    result = db.session.execute(statement)
+    db.session.commit()
+    return result.rowcount
+
+
+def _validate_merge_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+
+    from_member_id = _parse_positive_int(payload.get("fromMemberId"), "fromMemberId")
+    to_member_id = _parse_positive_int(payload.get("toMemberId"), "toMemberId")
+
+    if from_member_id == to_member_id:
+        raise ApiError(400, "fromMemberId must differ from toMemberId")
+
+    return {"from_member_id": from_member_id, "to_member_id": to_member_id}
+
 
 def _save(payment):
     db.session.add(payment)

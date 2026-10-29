@@ -29,6 +29,12 @@ def get_payment(payment_id):
     return jsonify(payment.to_dict())
 
 
+@payments_bp.post("/payments/merge")
+def merge_payments():
+    moved = payment_service.merge_payments(_json_body())
+    return jsonify({"moved": moved}), 200
+
+
 def _json_body():
     body = request.get_json(silent=True)
     return {} if body is None else body
