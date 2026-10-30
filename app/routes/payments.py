@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services import payment_service
 
@@ -15,6 +15,12 @@ def charge():
 def refund():
     payment = payment_service.refund(_json_body())
     return jsonify(payment.to_dict()), 201
+
+
+@payments_bp.post("/payments/merge")
+def merge_payments() -> tuple[Response, int]:
+    moved = payment_service.merge_payments(_json_body())
+    return jsonify({"moved": moved}), 200
 
 
 @payments_bp.get("/payments/member/<int:member_id>")
