@@ -7,6 +7,8 @@ from app.models import Payment
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
 PAYMENT_CHARGE_STATUSES = {"SUCCESS", "FAILED"}
+REFUND_STATUSES = {"SUCCESS", "PENDING"}
+SETTLE_STATUSES = {"SUCCESS", "FAILED"}
 
 
 def charge(payload):
@@ -22,8 +24,9 @@ def charge(payload):
     return _save(payment)
 
 
-def refund(payload):
+def refund(payload: dict) -> Payment:
     data = _validate_payment_payload(payload)
+    status = _parse_refund_status(payload.get("status"))
     related_id = data["related_payment_id"]
 
     if related_id is not None:
@@ -38,6 +41,12 @@ def refund(payload):
                 f"relatedPaymentId {related_id} is not a valid charge "
                 f"for member {data['member_id']}",
             )
+        if _refunded_total(related_id) + data["amount"] > original.amount:
+            raise ApiError(
+                409,
+                f"Refund of {data['amount']} exceeds the amount still "
+                f"refundable for relatedPaymentId {related_id}",
+            )
 
     payment = Payment(
         member_id=data["member_id"],
@@ -45,7 +54,7 @@ def refund(payload):
         reason=data["reason"],
         related_payment_id=related_id,
         type="REFUND",
-        status="SUCCESS",
+        status=status,
     )
     return _save(payment)
 
@@ -65,6 +74,37 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def _refunded_total(charge_id: int) -> Decimal:
+    total = db.session.scalar(
+        db.select(db.func.coalesce(db.func.sum(Payment.amount), 0)).where(
+            Payment.related_payment_id == charge_id,
+            Payment.type == "REFUND",
+            Payment.status.in_(REFUND_STATUSES),
+        )
+    )
+    if total is None or isinstance(total, int):
+        return Decimal("0.00")
+    return Decimal(str(total))
+
+
+def settle_refund(payment_id: int, payload: dict) -> Payment:
+    payment = get_payment(payment_id)
+
+    if not isinstance(payload, dict):
+        raise ApiError(400, "Request body must be a JSON object")
+
+    status = payload.get("status")
+    if not isinstance(status, str) or status not in SETTLE_STATUSES:
+        raise ApiError(400, "status must be one of: FAILED, SUCCESS")
+
+    if payment.type != "REFUND" or payment.status != "PENDING":
+        raise ApiError(409, f"Payment with id {payment_id} is not a pending refund")
+
+    payment.status = status
+    db.session.commit()
+    db.session.refresh(payment)
+    return payment
 
 
 def _save(payment):
@@ -110,6 +150,14 @@ def _parse_payment_status(value):
         return "SUCCESS"
     if not isinstance(value, str) or value not in PAYMENT_CHARGE_STATUSES:
         raise ApiError(400, "status must be one of: FAILED, SUCCESS")
+    return value
+
+
+def _parse_refund_status(value: object) -> str:
+    if value is None:
+        return "SUCCESS"
+    if not isinstance(value, str) or value not in REFUND_STATUSES:
+        raise ApiError(400, "status must be one of: PENDING, SUCCESS")
     return value
 
 
