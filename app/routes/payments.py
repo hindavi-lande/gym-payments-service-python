@@ -20,8 +20,7 @@ def refund():
 
 @payments_bp.get("/payments/member/<int:member_id>")
 def get_history_for_member(member_id):
-    history = payment_service.get_history_for_member(member_id)
-    return jsonify([payment.to_dict() for payment in history])
+    return jsonify(payment_service.payment_history(member_id))
 
 
 @payments_bp.get("/payments/<int:payment_id>")
