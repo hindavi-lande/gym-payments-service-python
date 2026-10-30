@@ -23,6 +23,11 @@ def get_history_for_member(member_id):
     return jsonify([payment.to_dict() for payment in history])
 
 
+@payments_bp.get("/payments/member/<int:member_id>/spend")
+def get_member_spend(member_id):
+    return jsonify(payment_service.get_member_spend(member_id))
+
+
 @payments_bp.get("/payments/<int:payment_id>")
 def get_payment(payment_id):
     payment = payment_service.get_payment(payment_id)
