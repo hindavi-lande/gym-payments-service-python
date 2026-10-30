@@ -145,3 +145,36 @@ def test_unknown_route_returns_404(client):
 
     assert response.status_code == 404
     assert "message" in response.get_json()
+
+
+def test_charge_with_failed_status_returns_402_and_persists(client):
+    response = charge(client, status="FAILED")
+
+    assert response.status_code == 402
+    body = response.get_json()
+    assert body["status"] == "FAILED"
+    assert isinstance(body["id"], int)
+
+    stored = client.get(f"/api/payments/{body['id']}")
+
+    assert stored.status_code == 200
+    assert stored.get_json()["status"] == "FAILED"
+
+
+def test_charge_defaults_status_to_success(client):
+    response = charge(client)
+
+    assert response.status_code == 201
+    assert response.get_json()["status"] == "SUCCESS"
+
+
+def test_charge_rejects_an_unsupported_status(client):
+    response = charge(client, status="PENDING")
+
+    assert response.status_code == 400
+    assert "status" in response.get_json()["message"]
+
+    history = client.get("/api/payments/member/1")
+
+    assert history.status_code == 200
+    assert history.get_json() == []
