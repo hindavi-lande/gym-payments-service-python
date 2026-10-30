@@ -51,9 +51,12 @@ change the port.
 
 - `GET /api/health` — liveness check
 - `POST /api/payments/charge` — `{ "memberId", "amount", "reason" }` — records a successful charge
-- `POST /api/payments/refund` — `{ "memberId", "amount", "reason", "relatedPaymentId" }` — records
-  a refund; if `relatedPaymentId` is given it must reference an existing `CHARGE` for that same
-  member, or `422`
+- `POST /api/payments/refund` — `{ "memberId", "amount", "reason", "relatedPaymentId", "status" }`
+  — records a refund; if `relatedPaymentId` is given it must reference an existing `CHARGE` for
+  that same member, or `422`. `status` is optional and accepts `SUCCESS` (default) or `PENDING`.
+  Refunding more than the charge still has outstanding returns `409`
+- `POST /api/payments/:id/settle` — settles a `PENDING` refund to `SUCCESS` or `FAILED`
+  (`{ "status" }`); settling anything that is not a pending refund returns `409`
 - `GET /api/payments/member/:memberId` — full payment history for a member, most recent first
 - `GET /api/payments/:id` — get one payment (`404` if missing)
 

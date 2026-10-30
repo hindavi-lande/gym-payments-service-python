@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from app.services import payment_service
 
@@ -28,6 +28,12 @@ def get_history_for_member(member_id):
 def get_payment(payment_id):
     payment = payment_service.get_payment(payment_id)
     return jsonify(payment.to_dict())
+
+
+@payments_bp.post("/payments/<int:payment_id>/settle")
+def settle_payment(payment_id: int) -> tuple[Response, int]:
+    payment = payment_service.settle_refund(payment_id, _json_body())
+    return jsonify(payment.to_dict()), 200
 
 
 def _json_body():
