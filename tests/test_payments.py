@@ -1,3 +1,9 @@
+from decimal import Decimal
+
+from app.extensions import db
+from app.models import Payment
+
+
 def charge(client, **overrides):
     payload = {"memberId": 1, "amount": 49.99, **overrides}
     return client.post("/api/payments/charge", json=payload)
@@ -178,3 +184,94 @@ def test_charge_rejects_an_unsupported_status(client):
 
     assert history.status_code == 200
     assert history.get_json() == []
+
+
+def test_history_annotates_a_charge_with_refunded_amount_in_cents(client):
+    original = charge(client).get_json()
+    refund = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    ).get_json()
+
+    response = client.get("/api/payments/member/1")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.get_json()}
+    assert isinstance(rows[original["id"]]["refundedAmount"], int)
+    assert rows[original["id"]]["refundedAmount"] == 2000
+    assert rows[refund["id"]]["refundedAmount"] == 0
+
+
+def test_history_sums_multiple_successful_refunds(client):
+    original = charge(client).get_json()
+    for amount in (20, 5.5):
+        client.post(
+            "/api/payments/refund",
+            json={"memberId": 1, "amount": amount, "relatedPaymentId": original["id"]},
+        )
+
+    response = client.get("/api/payments/member/1")
+
+    assert response.status_code == 200
+    charge_row = next(row for row in response.get_json() if row["id"] == original["id"])
+    assert charge_row["refundedAmount"] == 2550
+
+
+def test_history_gives_a_failed_charge_zero_refunded_amount(client):
+    failed = charge(client, status="FAILED").get_json()
+    refund = client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": failed["id"]},
+    ).get_json()
+
+    response = client.get("/api/payments/member/1")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.get_json()}
+    assert rows[failed["id"]]["status"] == "FAILED"
+    assert rows[failed["id"]]["refundedAmount"] == 0
+    assert rows[refund["id"]]["refundedAmount"] == 0
+
+
+def test_history_lists_a_pending_refund_but_counts_zero(app, client):
+    original = charge(client).get_json()
+    client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    )
+
+    pending = Payment(
+        member_id=1,
+        amount=Decimal("7.00"),
+        type="REFUND",
+        status="PENDING",
+        related_payment_id=original["id"],
+    )
+    db.session.add(pending)
+    db.session.commit()
+
+    response = client.get("/api/payments/member/1")
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.get_json()}
+    assert rows[pending.id]["status"] == "PENDING"
+    assert rows[pending.id]["refundedAmount"] == 0
+    assert rows[original["id"]]["refundedAmount"] == 2000
+
+
+def test_history_gives_non_charge_rows_zero_refunded_amount(client):
+    original = charge(client).get_json()
+    client.post(
+        "/api/payments/refund",
+        json={"memberId": 1, "amount": 20, "relatedPaymentId": original["id"]},
+    )
+
+    response = client.get("/api/payments/member/1")
+
+    assert response.status_code == 200
+    rows = response.get_json()
+    assert any(row["type"] == "REFUND" for row in rows)
+    for row in rows:
+        assert isinstance(row["refundedAmount"], int)
+        if row["type"] != "CHARGE":
+            assert row["refundedAmount"] == 0

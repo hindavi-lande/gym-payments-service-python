@@ -6,6 +6,7 @@ from app.models import Payment
 
 MAX_AMOUNT = Decimal("99999999.99")
 CENT = Decimal("0.01")
+CENT_FACTOR = Decimal("100")
 PAYMENT_CHARGE_STATUSES = {"SUCCESS", "FAILED"}
 
 
@@ -65,6 +66,41 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def payment_history(member_id) -> list[dict]:
+    payments = get_history_for_member(member_id)
+    refunded_cents = _refunded_cents_by_charge(payments)
+    return [_annotate(payment, refunded_cents) for payment in payments]
+
+
+def _refunded_cents_by_charge(payments) -> dict[int, int]:
+    refunded_cents = {}
+    for payment in payments:
+        if (
+            payment.type != "REFUND"
+            or payment.status != "SUCCESS"
+            or payment.related_payment_id is None
+        ):
+            continue
+        related_id = payment.related_payment_id
+        refunded_cents[related_id] = refunded_cents.get(related_id, 0) + _to_cents(
+            payment.amount
+        )
+    return refunded_cents
+
+
+def _annotate(payment, refunded_cents: dict[int, int]) -> dict:
+    data = payment.to_dict()
+    if payment.type == "CHARGE" and payment.status == "SUCCESS":
+        data["refundedAmount"] = refunded_cents.get(payment.id, 0)
+    else:
+        data["refundedAmount"] = 0
+    return data
+
+
+def _to_cents(amount) -> int:
+    cents = Decimal(amount) * CENT_FACTOR
+    return int(cents.quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def _save(payment):
