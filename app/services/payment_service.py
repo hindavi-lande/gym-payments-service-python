@@ -1,3 +1,5 @@
+import calendar
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from app.errors import ApiError
@@ -63,6 +65,41 @@ def get_history_for_member(member_id):
     )
     return db.session.scalars(statement).all()
 
+
+def _twelve_months_before(now):
+    year = now.year - 1
+    month = now.month
+    day = min(now.day, calendar.monthrange(year, month)[1])
+    return now.replace(year=year, month=month, day=day)
+
+
+def get_member_spend(member_id, now=None):
+    if now is None:
+        now = datetime.now(UTC)
+
+    # SQLite stores DateTime as naive wall time, so the window start is compared
+    # as naive UTC rather than as an aware datetime.
+    window_start = _twelve_months_before(now).astimezone(UTC).replace(tzinfo=None)
+
+    statement = db.select(Payment).where(
+        Payment.member_id == member_id,
+        Payment.status == "SUCCESS",
+        Payment.created_at >= window_start,
+    )
+
+    total_cents = 0
+    for payment in db.session.scalars(statement):
+        if payment.type == "CHARGE":
+            total_cents += _payment_cents(payment.amount)
+        elif payment.type == "REFUND":
+            total_cents -= _payment_cents(payment.amount)
+
+    return total_cents
+
+
+def _payment_cents(amount):
+    cents = (Decimal(amount) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(cents)
 
 
 def _save(payment):
